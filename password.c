@@ -53,11 +53,24 @@ static void set_input_idle(void *data) {
 	damage_state(state);
 }
 
+static void auto_submit_fingerprint(void *data);
+
 static void set_auth_idle(void *data) {
 	struct swaylock_state *state = data;
 	state->auth_idle_timer = NULL;
 	state->auth_state = AUTH_STATE_IDLE;
 	damage_state(state);
+	if (state->args.fingerprint && state->password.len == 0) {
+		loop_add_timer(state->eventloop, 200,
+			auto_submit_fingerprint, state);
+	}
+}
+
+static void auto_submit_fingerprint(void *data) {
+	struct swaylock_state *state = data;
+	if (state->auth_state == AUTH_STATE_IDLE && state->password.len == 0) {
+		submit_password(state);
+	}
 }
 
 static void schedule_input_idle(struct swaylock_state *state) {
@@ -107,8 +120,9 @@ static void cancel_password_clear(struct swaylock_state *state) {
 	}
 }
 
-static void submit_password(struct swaylock_state *state) {
-	if (state->args.ignore_empty && state->password.len == 0) {
+void submit_password(struct swaylock_state *state) {
+	if (state->args.ignore_empty && state->password.len == 0 &&
+			!state->args.fingerprint) {
 		return;
 	}
 	if (state->auth_state == AUTH_STATE_VALIDATING) {

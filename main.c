@@ -483,6 +483,7 @@ static int parse_options(int argc, char **argv, struct swaylock_state *state,
 		LO_TEXT_CAPS_LOCK_COLOR,
 		LO_TEXT_VER_COLOR,
 		LO_TEXT_WRONG_COLOR,
+		LO_FINGERPRINT,
 	};
 
 	static struct option long_options[] = {
@@ -511,6 +512,7 @@ static int parse_options(int argc, char **argv, struct swaylock_state *state,
 		{"font", required_argument, NULL, LO_FONT},
 		{"font-size", required_argument, NULL, LO_FONT_SIZE},
 		{"indicator-idle-visible", no_argument, NULL, LO_IND_IDLE_VISIBLE},
+		{"fingerprint", no_argument, NULL, LO_FINGERPRINT},
 		{"indicator-radius", required_argument, NULL, LO_IND_RADIUS},
 		{"indicator-thickness", required_argument, NULL, LO_IND_THICKNESS},
 		{"indicator-x-position", required_argument, NULL, LO_IND_X_POSITION},
@@ -592,6 +594,8 @@ static int parse_options(int argc, char **argv, struct swaylock_state *state,
 			"Sets the font of the text.\n"
 		"  --font-size <size>               "
 			"Sets a fixed font size for the indicator text.\n"
+		"  --fingerprint                    "
+			"Automatically trigger fingerprint auth on startup and retry after each failed attempt.\n"
 		"  --indicator-idle-visible         "
 			"Sets the indicator to show even if idle.\n"
 		"  --indicator-radius <radius>      "
@@ -794,6 +798,11 @@ static int parse_options(int argc, char **argv, struct swaylock_state *state,
 		case LO_IND_IDLE_VISIBLE:
 			if (state) {
 				state->args.indicator_idle_visible = true;
+			}
+			break;
+		case LO_FINGERPRINT:
+			if (state) {
+				state->args.fingerprint = true;
 			}
 			break;
 		case LO_IND_RADIUS:
@@ -1250,6 +1259,10 @@ int main(int argc, char **argv) {
 	loop_add_fd(state.eventloop, get_comm_reply_fd(), POLLIN, comm_in, NULL);
 
 	loop_add_fd(state.eventloop, sigusr_fds[0], POLLIN, term_in, NULL);
+
+	if (state.args.fingerprint) {
+		loop_add_timer(state.eventloop, 100, (void (*)(void *))submit_password, &state);
+	}
 
 	struct sigaction sa;
 	sa.sa_handler = do_sigusr;
