@@ -1,3 +1,36 @@
+# swaylock-fprintd
+
+Fork of [swaywm/swaylock](https://github.com/swaywm/swaylock) that adds a `--fingerprint` flag for automatic fingerprint auth via pam_fprintd.
+
+Without this flag, swaylock waits for you to press Enter before starting the PAM conversation — meaning you have to press Enter first, then scan your finger. With `--fingerprint`, scanning starts automatically when the lock screen appears and retries after each failed attempt. Password entry still works normally as a fallback.
+
+## Usage
+
+```sh
+swaylock --fingerprint -c 000000
+```
+
+Recommended swayidle setup:
+
+```sh
+exec swayidle -w \
+    timeout 300 'swaylock --fingerprint -c 000000' \
+    before-sleep 'swaylock --fingerprint -c 000000' \
+    lock 'swaylock --fingerprint -c 000000'
+```
+
+## Building
+
+```sh
+meson setup build -Dpam=enabled -Dgdk-pixbuf=disabled
+ninja -C build
+sudo install -m755 build/swaylock /usr/local/bin/swaylock-fprintd
+```
+
+Requires: `wayland-devel`, `wayland-protocols`, `libxkbcommon-devel`, `cairo-devel`, `pam-libs`.
+
+---
+
 # swaylock
 
 swaylock is a screen locking utility for Wayland compositors. It is compatible
