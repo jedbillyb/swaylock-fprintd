@@ -1,6 +1,11 @@
 #
-# PAM configuration file for the swaylock screen locker. By default, it includes
-# the 'login' configuration file (see /etc/pam.d/login)
+# PAM configuration for swaylock's password backend.
 #
-
-auth include login
+# This deliberately excludes pam_fprintd. Fingerprint authentication runs in a
+# separate, concurrent backend using the 'swaylock-fp' service, so that a typed
+# password is never blocked while a finger scan is outstanding. Including
+# pam_fprintd here would reintroduce that coupling.
+#
+auth      required  pam_unix.so try_first_pass nullok
+account   include   system-auth
+session   include   system-auth

@@ -140,11 +140,16 @@ static bool render_frame(struct swaylock_surface *surface) {
 	char attempts[4]; // like i3lock: count no more than 999
 	char *text = NULL;
 	const char *layout_text = NULL;
+	// Hint drawn as a caption below the ring (rather than crammed inside it).
+	const char *caption = NULL;
 
 	bool draw_indicator = state->args.show_indicator &&
 		(state->auth_state != AUTH_STATE_IDLE ||
 			state->input_state != INPUT_STATE_IDLE ||
-			state->args.indicator_idle_visible);
+			state->args.indicator_idle_visible ||
+			// In fingerprint mode, keep the indicator ring visible while idle
+			// so the locker isn't an unresponsive-looking black screen.
+			state->args.fingerprint);
 
 	if (draw_indicator) {
 		if (state->input_state == INPUT_STATE_CLEAR) {
@@ -194,13 +199,25 @@ static bool render_frame(struct swaylock_surface *surface) {
 	int buffer_width = buffer_diameter;
 	int buffer_height = buffer_diameter;
 
-	if (text || layout_text) {
+	double caption_gap = 0;
+	if (text || layout_text || caption) {
 		cairo_set_antialias(state->test_cairo, CAIRO_ANTIALIAS_BEST);
 		configure_font_drawing(state->test_cairo, state, surface->subpixel, arc_radius);
 
 		if (text) {
 			cairo_text_extents_t extents;
 			cairo_text_extents(state->test_cairo, text, &extents);
+			if (buffer_width < extents.width) {
+				buffer_width = extents.width;
+			}
+		}
+		if (caption) {
+			cairo_text_extents_t extents;
+			cairo_font_extents_t fe;
+			cairo_text_extents(state->test_cairo, caption, &extents);
+			cairo_font_extents(state->test_cairo, &fe);
+			caption_gap = fe.height + 8.0 * surface->scale;
+			buffer_height += caption_gap;
 			if (buffer_width < extents.width) {
 				buffer_width = extents.width;
 			}
@@ -356,6 +373,21 @@ static bool render_frame(struct swaylock_surface *surface) {
 		cairo_arc(cairo, buffer_width / 2, buffer_diameter / 2,
 				arc_radius + arc_thickness / 2, 0, 2 * M_PI);
 		cairo_stroke(cairo);
+
+		// Draw the idle hint as a caption centered below the ring.
+		if (caption) {
+			cairo_text_extents_t extents;
+			cairo_font_extents_t fe;
+			cairo_text_extents(cairo, caption, &extents);
+			cairo_font_extents(cairo, &fe);
+			double x = (buffer_width / 2) - (extents.width / 2 + extents.x_bearing);
+			double y = buffer_diameter + (fe.height - fe.descent);
+			set_color_for_state(cairo, state, &state->args.colors.text);
+			cairo_move_to(cairo, x, y);
+			cairo_show_text(cairo, caption);
+			cairo_close_path(cairo);
+			cairo_new_sub_path(cairo);
+		}
 
 		// display layout text separately
 		if (layout_text) {

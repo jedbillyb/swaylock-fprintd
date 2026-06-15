@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include "comm.h"
 #include "log.h"
@@ -144,5 +145,87 @@ void run_pw_backend_child(void) {
 		exit(EXIT_FAILURE);
 	}
 
+	exit((pam_status == PAM_SUCCESS) ? EXIT_SUCCESS : EXIT_FAILURE);
+}
+
+static int fp_conversation(int num_msg, const struct pam_message **msg,
+		struct pam_response **resp, void *data) {
+	struct pam_response *pam_reply =
+		calloc(num_msg, sizeof(struct pam_response));
+	if (pam_reply == NULL) {
+		swaylock_log(LOG_ERROR, "Allocation failed");
+		return PAM_ABORT;
+	}
+	*resp = pam_reply;
+	for (int i = 0; i < num_msg; ++i) {
+		switch (msg[i]->msg_style) {
+		case PAM_PROMPT_ECHO_OFF:
+		case PAM_PROMPT_ECHO_ON:
+			/* A fingerprint-only stack must never ask for a password. If it
+			 * does, /etc/pam.d/swaylock-fp is misconfigured; bail rather than
+			 * silently block. */
+			swaylock_log(LOG_ERROR,
+				"fingerprint PAM service requested input; check that "
+				"/etc/pam.d/swaylock-fp contains only pam_fprintd");
+			return PAM_CONV_ERR;
+		case PAM_ERROR_MSG:
+		case PAM_TEXT_INFO:
+			swaylock_log(LOG_DEBUG, "fingerprint: %s", msg[i]->msg);
+			break;
+		}
+	}
+	return PAM_SUCCESS;
+}
+
+void run_fp_backend_child(void) {
+	struct passwd *passwd = getpwuid(getuid());
+	if (!passwd) {
+		swaylock_log_errno(LOG_ERROR, "getpwuid failed");
+		exit(EXIT_FAILURE);
+	}
+	char *username = passwd->pw_name;
+
+	/* Block until the parent enables fingerprint auth (--fingerprint). If the
+	 * parent goes away before then, just exit quietly. */
+	if (!wait_fp_start()) {
+		exit(EXIT_SUCCESS);
+	}
+
+	const struct pam_conv conv = {
+		.conv = fp_conversation,
+		.appdata_ptr = NULL,
+	};
+	pam_handle_t *auth_handle = NULL;
+	if (pam_start("swaylock-fp", username, &conv, &auth_handle) != PAM_SUCCESS) {
+		swaylock_log(LOG_ERROR, "pam_start failed for fingerprint service");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Permanent verify loop. pam_fprintd allows a few finger attempts per
+	 * pam_authenticate() call, then returns; we retry forever (with a short
+	 * backoff) so the user gets effectively unlimited finger attempts. This
+	 * runs entirely independently of the password child, so a pending or
+	 * failed scan never blocks typing. The loop ends when a finger matches, or
+	 * when the parent kills us after a password unlock / shutdown. */
+	int pam_status = PAM_AUTH_ERR;
+	while (1) {
+		pam_status = pam_authenticate(auth_handle, 0);
+		bool success = pam_status == PAM_SUCCESS;
+		if (!write_fp_reply(success)) {
+			break; // parent is gone
+		}
+		if (success) {
+			break;
+		}
+		/* Brief back-off so we neither hammer the reader nor spin if the device
+		 * is momentarily unavailable (e.g. mid-release after a failed match). */
+		struct timespec ts = { .tv_sec = 0, .tv_nsec = 100 * 1000 * 1000 };
+		nanosleep(&ts, NULL);
+	}
+
+	if (pam_status == PAM_SUCCESS) {
+		pam_setcred(auth_handle, PAM_REFRESH_CRED);
+	}
+	pam_end(auth_handle, pam_status);
 	exit((pam_status == PAM_SUCCESS) ? EXIT_SUCCESS : EXIT_FAILURE);
 }

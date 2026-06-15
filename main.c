@@ -1066,6 +1066,33 @@ static void comm_in(int fd, short mask, void *data) {
 	}
 }
 
+static void fp_comm_in(int fd, short mask, void *data) {
+	if (mask & POLLIN) {
+		bool auth_success = false;
+		if (!read_fp_reply(&auth_success)) {
+			// Fingerprint child is gone; stop polling but keep password working.
+			loop_remove_fd(state.eventloop, get_fp_reply_fd());
+			return;
+		}
+		if (auth_success) {
+			// Fingerprint matched.
+			state.run_display = false;
+		} else {
+			// Show brief "wrong" feedback, but only when the user isn't typing
+			// or already validating a password, so finger misses never disturb
+			// password entry.
+			if (state.auth_state == AUTH_STATE_IDLE && state.password.len == 0) {
+				state.auth_state = AUTH_STATE_INVALID;
+				schedule_auth_idle(&state);
+				damage_state(&state);
+			}
+		}
+	} else if (mask & (POLLHUP | POLLERR)) {
+		// Fingerprint child exited; password auth is unaffected, so don't quit.
+		loop_remove_fd(state.eventloop, get_fp_reply_fd());
+	}
+}
+
 static void term_in(int fd, short mask, void *data) {
 	state.run_display = false;
 }
@@ -1261,7 +1288,8 @@ int main(int argc, char **argv) {
 	loop_add_fd(state.eventloop, sigusr_fds[0], POLLIN, term_in, NULL);
 
 	if (state.args.fingerprint) {
-		loop_add_timer(state.eventloop, 100, (void (*)(void *))submit_password, &state);
+		loop_add_fd(state.eventloop, get_fp_reply_fd(), POLLIN, fp_comm_in, NULL);
+		start_fingerprint();
 	}
 
 	struct sigaction sa;
@@ -1278,6 +1306,9 @@ int main(int argc, char **argv) {
 		}
 		loop_poll(state.eventloop);
 	}
+
+	// Kill the fingerprint child so fprintd releases its claim on the reader.
+	terminate_comm_children();
 
 	ext_session_lock_v1_unlock_and_destroy(state.ext_session_lock_v1);
 	wl_display_roundtrip(state.display);

@@ -1,0 +1,13 @@
+#
+# PAM configuration for swaylock's fingerprint backend.
+#
+# This contains ONLY pam_fprintd, so a finger scan never falls through to a
+# password prompt. It runs concurrently with the 'swaylock' password backend
+# (see /etc/pam.d/swaylock); whichever succeeds first unlocks the session.
+#
+# max-tries keeps the verify session (and the reader claim) open across several
+# missed scans, so a wrong finger lets you rescan immediately instead of paying
+# the device claim + TLS handshake again each time.
+auth      required  pam_fprintd.so max-tries=10
+account   include   system-auth
+session   include   system-auth

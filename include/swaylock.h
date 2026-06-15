@@ -144,6 +144,7 @@ void submit_password(struct swaylock_state *state);
 
 void initialize_pw_backend(int argc, char **argv);
 void run_pw_backend_child(void);
+void run_fp_backend_child(void);
 void clear_buffer(char *buf, size_t size);
 
 #endif
