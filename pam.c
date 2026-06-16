@@ -209,7 +209,10 @@ void run_fp_backend_child(void) {
 	 * when the parent kills us after a password unlock / shutdown. */
 	int pam_status = PAM_AUTH_ERR;
 	while (1) {
+		struct timespec t0, t1;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
 		pam_status = pam_authenticate(auth_handle, 0);
+		clock_gettime(CLOCK_MONOTONIC, &t1);
 		bool success = pam_status == PAM_SUCCESS;
 		if (!write_fp_reply(success)) {
 			break; // parent is gone
@@ -217,6 +220,31 @@ void run_fp_backend_child(void) {
 		if (success) {
 			break;
 		}
+
+		/* A genuine wrong-finger attempt makes pam_fprintd block for a touch and
+		 * run the device activate + TLS handshake, costing seconds. If
+		 * pam_authenticate fails almost instantly, no finger was read: the
+		 * fprintd verify session is dead ("verify-disconnected"). This happens
+		 * when the Goodix sensor re-enumerates onto a new USB address after
+		 * idle/sleep and leaves the running daemon bound to a stale fd. Left
+		 * alone, every retry fails the same way and swaylock loops "Wrong"
+		 * forever with no finger touch. Restart fprintd so dbus reactivates a
+		 * fresh, correctly-bound daemon, then wait for the USB device to settle
+		 * before retrying. This is timing-independent: it heals both the
+		 * re-enumeration case and a bare stale-TLS session. */
+		double elapsed = (t1.tv_sec - t0.tv_sec) +
+			(t1.tv_nsec - t0.tv_nsec) / 1000000000.0;
+		if (elapsed < 1.5) {
+			if (system("/usr/bin/sudo -n /usr/local/bin/fprintd-restart"
+					" >/dev/null 2>&1") != 0) {
+				swaylock_log(LOG_DEBUG,
+					"fprintd self-heal restart command failed");
+			}
+			struct timespec settle = { .tv_sec = 1, .tv_nsec = 500 * 1000 * 1000 };
+			nanosleep(&settle, NULL);
+			continue;
+		}
+
 		/* Brief back-off so we neither hammer the reader nor spin if the device
 		 * is momentarily unavailable (e.g. mid-release after a failed match). */
 		struct timespec ts = { .tv_sec = 0, .tv_nsec = 100 * 1000 * 1000 };
