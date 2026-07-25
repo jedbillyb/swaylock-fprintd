@@ -1180,8 +1180,10 @@ static void comm_in(int fd, short mask, void *data) {
 			exit(EXIT_FAILURE);
 		}
 		if (auth_success) {
-			// Authentication succeeded. Play the unblur, then unlock.
+			// Authentication succeeded. The child exits now, so stop polling
+			// its pipe before playing the unblur.
 			state.unlock_after_blur = true;
+			loop_remove_fd(state.eventloop, get_comm_reply_fd());
 			blur_start(&state, -1);
 			if (state.blur_frame_count < 2) {
 				state.run_display = false;
@@ -1193,8 +1195,16 @@ static void comm_in(int fd, short mask, void *data) {
 			damage_state(&state);
 		}
 	} else if (mask & (POLLHUP | POLLERR)) {
-		swaylock_log(LOG_ERROR,	"Password checking subprocess crashed; exiting.");
-		exit(EXIT_FAILURE);
+		// The password child exits on its own once it has reported a
+		// successful auth, so a hangup after that point is expected, not a
+		// crash. Exiting here would skip unlock_and_destroy and leave sway
+		// showing an abandoned (red) lock.
+		loop_remove_fd(state.eventloop, get_comm_reply_fd());
+		if (!state.unlock_after_blur) {
+			swaylock_log(LOG_ERROR,
+				"Password checking subprocess crashed; exiting.");
+			exit(EXIT_FAILURE);
+		}
 	}
 }
 
@@ -1207,8 +1217,10 @@ static void fp_comm_in(int fd, short mask, void *data) {
 			return;
 		}
 		if (auth_success) {
-			// Fingerprint matched. Play the unblur, then unlock.
+			// Fingerprint matched. The child exits now, so stop polling its
+			// pipe before playing the unblur.
 			state.unlock_after_blur = true;
+			loop_remove_fd(state.eventloop, get_fp_reply_fd());
 			blur_start(&state, -1);
 			if (state.blur_frame_count < 2) {
 				state.run_display = false;
