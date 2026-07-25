@@ -4,6 +4,9 @@ Fork of [swaywm/swaylock](https://github.com/swaywm/swaylock) that adds a
 `--fingerprint` flag so the lock screen accepts a fingerprint **and** a typed
 password at the same time, with neither blocking the other.
 
+This is a personal fork. It is not packaged, supported, or submitted upstream. If you
+want swaylock itself, go to [swaywm/swaylock](https://github.com/swaywm/swaylock).
+
 ## Why this fork
 
 Stock swaylock has a single, synchronous PAM conversation that doesn't start
