@@ -130,6 +130,7 @@ struct swaylock_surface {
 	struct wl_subsurface *subsurface;
 	struct ext_session_lock_surface_v1 *ext_session_lock_surface_v1;
 	struct pool_buffer indicator_buffers[2];
+	struct pool_buffer background_buffers[2];
 	bool created;
 	bool dirty;
 	uint32_t width, height;

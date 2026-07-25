@@ -63,24 +63,24 @@ void render(struct swaylock_surface *surface) {
 		return;
 	}
 
-	bool need_destroy = false;
-	struct pool_buffer buffer;
-
 	// While the blur animation runs the background changes every frame, so the
 	// usual "only redraw on resize" shortcut has to be bypassed.
 	bool animating = state->blur_dir != 0 && state->blur_frame_count > 0;
 
 	if (animating || buffer_width != surface->last_buffer_width ||
 			buffer_height != surface->last_buffer_height) {
-		need_destroy = true;
-		if (!create_buffer(state->shm, &buffer, buffer_width, buffer_height,
-				WL_SHM_FORMAT_ARGB8888)) {
-			swaylock_log(LOG_ERROR,
-				"Failed to create new buffer for frame background.");
+		// Must be a double-buffered pool, not a one-off create/destroy: the
+		// compositor may still be reading the shm buffer after commit, and
+		// unmapping it there produced visible flashing once this path started
+		// running every frame instead of only on resize.
+		struct pool_buffer *buffer = get_next_buffer(state->shm,
+			surface->background_buffers, buffer_width, buffer_height);
+		if (!buffer) {
+			// Both buffers still held by the compositor; retry next frame.
 			return;
 		}
 
-		cairo_t *cairo = buffer.cairo;
+		cairo_t *cairo = buffer->cairo;
 		cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
 
 		cairo_save(cairo);
@@ -118,9 +118,8 @@ void render(struct swaylock_surface *surface) {
 		cairo_restore(cairo);
 		cairo_identity_matrix(cairo);
 
-		wl_surface_attach(surface->surface, buffer.buffer, 0, 0);
+		wl_surface_attach(surface->surface, buffer->buffer, 0, 0);
 		wl_surface_damage_buffer(surface->surface, 0, 0, INT32_MAX, INT32_MAX);
-		need_destroy = true;
 
 		surface->last_buffer_width = buffer_width;
 		surface->last_buffer_height = buffer_height;
@@ -134,10 +133,6 @@ void render(struct swaylock_surface *surface) {
 	surface->frame = wl_surface_frame(surface->surface);
 	wl_callback_add_listener(surface->frame, &surface_frame_listener, surface);
 	wl_surface_commit(surface->surface);
-
-	if (need_destroy) {
-		destroy_buffer(&buffer);
-	}
 }
 
 static void configure_font_drawing(cairo_t *cairo, struct swaylock_state *state,
