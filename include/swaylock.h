@@ -113,6 +113,12 @@ struct swaylock_state {
 	cairo_surface_t **blur_frames;
 	int blur_frame_count;
 	double blur_pos;
+	// Linear animation progress, 0.0 (sharp) to 1.0 (fully blurred). This is
+	// what advances at a constant rate; blur_pos is derived from it through an
+	// ease curve, so the animation starts slow, speeds up, and settles gently.
+	// Keeping the two separate means an animation interrupted part-way resumes
+	// from where it actually is rather than jumping.
+	double blur_t;
 	int blur_dir; // +1 blurring in, -1 blurring out, 0 idle
 	struct loop_timer *blur_timer;
 	// Set when the blur-out is playing because auth succeeded; the display

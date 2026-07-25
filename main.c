@@ -1072,6 +1072,17 @@ static void blur_schedule(struct swaylock_state *state) {
 		blur_tick, state);
 }
 
+// Cubic ease-in-out. A linear ramp reads as an abrupt lurch at both ends;
+// this eases away from rest, moves quickest through the middle, and settles
+// softly rather than stopping dead.
+static double blur_ease(double t) {
+	if (t < 0.5) {
+		return 4.0 * t * t * t;
+	}
+	double f = -2.0 * t + 2.0;
+	return 1.0 - (f * f * f) / 2.0;
+}
+
 static void blur_tick(void *data) {
 	struct swaylock_state *state = data;
 	state->blur_timer = NULL;
@@ -1083,16 +1094,18 @@ static void blur_tick(void *data) {
 	double span = state->blur_frame_count - 1;
 	double duration = state->args.blur_duration > 0 ?
 		state->args.blur_duration : 300;
-	state->blur_pos += state->blur_dir * span * BLUR_TICK_MS / duration;
+	state->blur_t += state->blur_dir * BLUR_TICK_MS / duration;
 
 	bool done = false;
-	if (state->blur_dir > 0 && state->blur_pos >= span) {
-		state->blur_pos = span;
+	if (state->blur_dir > 0 && state->blur_t >= 1.0) {
+		state->blur_t = 1.0;
 		done = true;
-	} else if (state->blur_dir < 0 && state->blur_pos <= 0.0) {
-		state->blur_pos = 0.0;
+	} else if (state->blur_dir < 0 && state->blur_t <= 0.0) {
+		state->blur_t = 0.0;
 		done = true;
 	}
+
+	state->blur_pos = blur_ease(state->blur_t) * span;
 
 	damage_state(state);
 
@@ -1367,6 +1380,13 @@ int main(int argc, char **argv) {
 	}
 	state.eventloop = loop_create();
 
+	// Must happen before any surface is created: the first render would
+	// otherwise paint args.colors.background (white by default), which showed
+	// up as a flash before the first blur frame appeared.
+	load_blur_frames(&state);
+	state.blur_pos = 0.0;
+	state.blur_t = 0.0;
+
 	struct wl_registry *registry = wl_display_get_registry(state.display);
 	wl_registry_add_listener(registry, &registry_listener, &state);
 	if (wl_display_roundtrip(state.display) == -1) {
@@ -1442,11 +1462,9 @@ int main(int argc, char **argv) {
 		start_fingerprint();
 	}
 
-	// Start blurred-out and ramp in, so the lock appears with the desktop
-	// dissolving behind it rather than snapping to a blur.
-	load_blur_frames(&state);
+	// Frames were loaded before the surfaces existed, so the first painted
+	// frame is already the sharp screenshot. Now ramp the blur in.
 	if (state.blur_frame_count >= 2) {
-		state.blur_pos = 0.0;
 		blur_start(&state, 1);
 	}
 
