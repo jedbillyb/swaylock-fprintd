@@ -70,6 +70,10 @@ struct swaylock_args {
 	int ready_fd;
 	bool indicator_idle_visible;
 	bool fingerprint;
+	// Directory of blur frames (frame-00.png = sharp, ascending = blurrier).
+	char *blur_frames_dir;
+	// Duration in ms of the blur-in / blur-out animation.
+	uint32_t blur_duration;
 };
 
 struct swaylock_password {
@@ -101,6 +105,19 @@ struct swaylock_state {
 	bool run_display, locked;
 	struct ext_session_lock_manager_v1 *ext_session_lock_manager_v1;
 	struct ext_session_lock_v1 *ext_session_lock_v1;
+
+	// Blur animation. blur_frames[0] is the sharp screenshot, later entries are
+	// progressively blurrier (and may be lower resolution, since blurred
+	// content upscales without visible loss). blur_pos walks that list; the
+	// fractional part cross-fades between adjacent frames.
+	cairo_surface_t **blur_frames;
+	int blur_frame_count;
+	double blur_pos;
+	int blur_dir; // +1 blurring in, -1 blurring out, 0 idle
+	struct loop_timer *blur_timer;
+	// Set when the blur-out is playing because auth succeeded; the display
+	// loop exits (and the session unlocks) once it finishes.
+	bool unlock_after_blur;
 };
 
 struct swaylock_surface {
@@ -141,6 +158,8 @@ void damage_state(struct swaylock_state *state);
 void clear_password_buffer(struct swaylock_password *pw);
 void schedule_auth_idle(struct swaylock_state *state);
 void submit_password(struct swaylock_state *state);
+
+void blur_start(struct swaylock_state *state, int dir);
 
 void initialize_pw_backend(int argc, char **argv);
 void run_pw_backend_child(void);

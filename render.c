@@ -66,7 +66,11 @@ void render(struct swaylock_surface *surface) {
 	bool need_destroy = false;
 	struct pool_buffer buffer;
 
-	if (buffer_width != surface->last_buffer_width ||
+	// While the blur animation runs the background changes every frame, so the
+	// usual "only redraw on resize" shortcut has to be bypassed.
+	bool animating = state->blur_dir != 0 && state->blur_frame_count > 0;
+
+	if (animating || buffer_width != surface->last_buffer_width ||
 			buffer_height != surface->last_buffer_height) {
 		need_destroy = true;
 		if (!create_buffer(state->shm, &buffer, buffer_width, buffer_height,
@@ -83,7 +87,30 @@ void render(struct swaylock_surface *surface) {
 		cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
 		cairo_set_source_u32(cairo, state->args.colors.background);
 		cairo_paint(cairo);
-		if (surface->image && state->args.mode != BACKGROUND_MODE_SOLID_COLOR) {
+		if (state->blur_frame_count > 0) {
+			cairo_set_operator(cairo, CAIRO_OPERATOR_OVER);
+
+			// Paint the lower blur level opaque, then fade the next one in
+			// over it by the fractional part of blur_pos.
+			int lower = (int)state->blur_pos;
+			if (lower < 0) {
+				lower = 0;
+			}
+			if (lower > state->blur_frame_count - 1) {
+				lower = state->blur_frame_count - 1;
+			}
+			double frac = state->blur_pos - lower;
+
+			render_background_image(cairo, state->blur_frames[lower],
+				state->args.mode, buffer_width, buffer_height);
+
+			if (frac > 0.0 && lower + 1 < state->blur_frame_count) {
+				render_background_image_alpha(cairo,
+					state->blur_frames[lower + 1], state->args.mode,
+					buffer_width, buffer_height, frac);
+			}
+		} else if (surface->image &&
+				state->args.mode != BACKGROUND_MODE_SOLID_COLOR) {
 			cairo_set_operator(cairo, CAIRO_OPERATOR_OVER);
 			render_background_image(cairo, surface->image,
 				state->args.mode, buffer_width, buffer_height);

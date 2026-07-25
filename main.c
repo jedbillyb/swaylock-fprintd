@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -484,6 +485,8 @@ static int parse_options(int argc, char **argv, struct swaylock_state *state,
 		LO_TEXT_VER_COLOR,
 		LO_TEXT_WRONG_COLOR,
 		LO_FINGERPRINT,
+		LO_BLUR_FRAMES,
+		LO_BLUR_DURATION,
 	};
 
 	static struct option long_options[] = {
@@ -513,6 +516,8 @@ static int parse_options(int argc, char **argv, struct swaylock_state *state,
 		{"font-size", required_argument, NULL, LO_FONT_SIZE},
 		{"indicator-idle-visible", no_argument, NULL, LO_IND_IDLE_VISIBLE},
 		{"fingerprint", no_argument, NULL, LO_FINGERPRINT},
+		{"blur-frames", required_argument, NULL, LO_BLUR_FRAMES},
+		{"blur-duration", required_argument, NULL, LO_BLUR_DURATION},
 		{"indicator-radius", required_argument, NULL, LO_IND_RADIUS},
 		{"indicator-thickness", required_argument, NULL, LO_IND_THICKNESS},
 		{"indicator-x-position", required_argument, NULL, LO_IND_X_POSITION},
@@ -596,6 +601,10 @@ static int parse_options(int argc, char **argv, struct swaylock_state *state,
 			"Sets a fixed font size for the indicator text.\n"
 		"  --fingerprint                    "
 			"Automatically trigger fingerprint auth on startup and retry after each failed attempt.\n"
+		"  --blur-frames <dir>              "
+			"Animate a blur using frame-00.png (sharp) .. frame-NN.png (blurriest) from <dir>.\n"
+		"  --blur-duration <ms>             "
+			"Duration of the blur-in/blur-out animation in milliseconds (default 300).\n"
 		"  --indicator-idle-visible         "
 			"Sets the indicator to show even if idle.\n"
 		"  --indicator-radius <radius>      "
@@ -803,6 +812,17 @@ static int parse_options(int argc, char **argv, struct swaylock_state *state,
 		case LO_FINGERPRINT:
 			if (state) {
 				state->args.fingerprint = true;
+			}
+			break;
+		case LO_BLUR_FRAMES:
+			if (state) {
+				free(state->args.blur_frames_dir);
+				state->args.blur_frames_dir = strdup(optarg);
+			}
+			break;
+		case LO_BLUR_DURATION:
+			if (state) {
+				state->args.blur_duration = strtol(optarg, NULL, 10);
 			}
 			break;
 		case LO_IND_RADIUS:
@@ -1039,6 +1059,114 @@ static int load_config(char *path, struct swaylock_state *state,
 
 static struct swaylock_state state;
 
+// How often the blur animation advances. ~60fps.
+#define BLUR_TICK_MS 16
+
+static void blur_tick(void *data);
+
+// Arms the next animation tick. Split out because loop timers are one-shot.
+static void blur_schedule(struct swaylock_state *state) {
+	state->blur_timer = loop_add_timer(state->eventloop, BLUR_TICK_MS,
+		blur_tick, state);
+}
+
+static void blur_tick(void *data) {
+	struct swaylock_state *state = data;
+	state->blur_timer = NULL;
+
+	if (state->blur_dir == 0 || state->blur_frame_count < 2) {
+		return;
+	}
+
+	double span = state->blur_frame_count - 1;
+	double duration = state->args.blur_duration > 0 ?
+		state->args.blur_duration : 300;
+	state->blur_pos += state->blur_dir * span * BLUR_TICK_MS / duration;
+
+	bool done = false;
+	if (state->blur_dir > 0 && state->blur_pos >= span) {
+		state->blur_pos = span;
+		done = true;
+	} else if (state->blur_dir < 0 && state->blur_pos <= 0.0) {
+		state->blur_pos = 0.0;
+		done = true;
+	}
+
+	damage_state(state);
+
+	if (done) {
+		state->blur_dir = 0;
+		if (state->unlock_after_blur) {
+			// Blur-out finished; leave the display loop and unlock.
+			state->run_display = false;
+		}
+		return;
+	}
+
+	blur_schedule(state);
+}
+
+void blur_start(struct swaylock_state *state, int dir) {
+	if (state->blur_frame_count < 2) {
+		// Nothing to animate; if this was the unlock animation, unlock now.
+		if (dir < 0 && state->unlock_after_blur) {
+			state->run_display = false;
+		}
+		return;
+	}
+
+	state->blur_dir = dir;
+	if (state->blur_timer) {
+		loop_remove_timer(state->eventloop, state->blur_timer);
+		state->blur_timer = NULL;
+	}
+	blur_schedule(state);
+}
+
+// Loads frame-00.png, frame-01.png, ... until one is missing. Frame 0 is the
+// sharp screenshot; each subsequent frame is blurrier.
+static void load_blur_frames(struct swaylock_state *state) {
+	if (!state->args.blur_frames_dir) {
+		return;
+	}
+
+	int capacity = 16;
+	state->blur_frames = calloc(capacity, sizeof(cairo_surface_t *));
+	if (!state->blur_frames) {
+		return;
+	}
+
+	for (int i = 0; i < capacity; i++) {
+		char path[PATH_MAX];
+		snprintf(path, sizeof(path), "%s/frame-%02d.png",
+			state->args.blur_frames_dir, i);
+		if (access(path, R_OK) != 0) {
+			break;
+		}
+
+		cairo_surface_t *img = load_background_image(path);
+		if (!img) {
+			swaylock_log(LOG_ERROR, "Failed to load blur frame %s", path);
+			break;
+		}
+		state->blur_frames[i] = img;
+		state->blur_frame_count++;
+	}
+
+	if (state->blur_frame_count < 2) {
+		swaylock_log(LOG_ERROR,
+			"Need at least 2 blur frames in %s; disabling blur animation.",
+			state->args.blur_frames_dir);
+		for (int i = 0; i < state->blur_frame_count; i++) {
+			cairo_surface_destroy(state->blur_frames[i]);
+		}
+		free(state->blur_frames);
+		state->blur_frames = NULL;
+		state->blur_frame_count = 0;
+	}
+}
+
+
 static void display_in(int fd, short mask, void *data) {
 	if (wl_display_dispatch(state.display) == -1) {
 		state.run_display = false;
@@ -1052,8 +1180,12 @@ static void comm_in(int fd, short mask, void *data) {
 			exit(EXIT_FAILURE);
 		}
 		if (auth_success) {
-			// Authentication succeeded
-			state.run_display = false;
+			// Authentication succeeded. Play the unblur, then unlock.
+			state.unlock_after_blur = true;
+			blur_start(&state, -1);
+			if (state.blur_frame_count < 2) {
+				state.run_display = false;
+			}
 		} else {
 			state.auth_state = AUTH_STATE_INVALID;
 			schedule_auth_idle(&state);
@@ -1075,8 +1207,12 @@ static void fp_comm_in(int fd, short mask, void *data) {
 			return;
 		}
 		if (auth_success) {
-			// Fingerprint matched.
-			state.run_display = false;
+			// Fingerprint matched. Play the unblur, then unlock.
+			state.unlock_after_blur = true;
+			blur_start(&state, -1);
+			if (state.blur_frame_count < 2) {
+				state.run_display = false;
+			}
 		} else {
 			// Show brief "wrong" feedback, but only when the user isn't typing
 			// or already validating a password, so finger misses never disturb
@@ -1290,6 +1426,14 @@ int main(int argc, char **argv) {
 	if (state.args.fingerprint) {
 		loop_add_fd(state.eventloop, get_fp_reply_fd(), POLLIN, fp_comm_in, NULL);
 		start_fingerprint();
+	}
+
+	// Start blurred-out and ramp in, so the lock appears with the desktop
+	// dissolving behind it rather than snapping to a blur.
+	load_blur_frames(&state);
+	if (state.blur_frame_count >= 2) {
+		state.blur_pos = 0.0;
+		blur_start(&state, 1);
 	}
 
 	struct sigaction sa;
