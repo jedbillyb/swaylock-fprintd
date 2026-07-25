@@ -135,6 +135,15 @@ if libpam.found()
 	)
 endif
 
+test_loop = executable(
+	'test-loop',
+	['tests/test_loop.c', 'loop.c', 'log.c'],
+	include_directories: [include_directories('include')],
+	dependencies: [wayland_client],
+	build_by_default: false,
+)
+test('loop', test_loop)
+
 if scdoc.found()
 	mandir = get_option('mandir')
 	man_files = [

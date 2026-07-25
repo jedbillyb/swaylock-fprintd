@@ -13,6 +13,9 @@
 struct loop_fd_event {
 	void (*callback)(int fd, short mask, void *data);
 	void *data;
+	// Set by loop_remove_fd() when called from inside a dispatch callback;
+	// the entry is reaped after the dispatch loop finishes.
+	bool removed;
 	struct wl_list link; // struct loop_fd_event::link
 };
 
@@ -95,11 +98,29 @@ void loop_poll(struct loop *loop) {
 		// Always send these events
 		unsigned events = pfd.events | POLLHUP | POLLERR;
 
-		if (pfd.revents & events) {
+		if (!event->removed && (pfd.revents & events)) {
 			event->callback(pfd.fd, pfd.revents, event->data);
 		}
 
 		++fd_index;
+	}
+
+	// Reap anything a callback asked to remove. This cannot be done inline
+	// above: freeing the node the iterator is standing on corrupts it.
+	fd_index = 0;
+	struct loop_fd_event *tmp_event = NULL;
+	wl_list_for_each_safe(event, tmp_event, &loop->fd_events, link) {
+		if (!event->removed) {
+			++fd_index;
+			continue;
+		}
+
+		wl_list_remove(&event->link);
+		free(event);
+
+		loop->fd_length--;
+		memmove(&loop->fds[fd_index], &loop->fds[fd_index + 1],
+				sizeof(struct pollfd) * (loop->fd_length - fd_index));
 	}
 
 	// Dispatch timers
@@ -174,16 +195,18 @@ struct loop_timer *loop_add_timer(struct loop *loop, int ms,
 }
 
 bool loop_remove_fd(struct loop *loop, int fd) {
+	// Callers include dispatch callbacks running inside loop_poll(), so the
+	// entry is only marked here and freed once dispatch has finished.
+	// Clearing the pollfd makes poll(2) ignore it in the meantime, which also
+	// stops a hung-up fd from spinning the loop until it is reaped.
 	size_t fd_index = 0;
-	struct loop_fd_event *event = NULL, *tmp_event = NULL;
-	wl_list_for_each_safe(event, tmp_event, &loop->fd_events, link) {
+	struct loop_fd_event *event = NULL;
+	wl_list_for_each(event, &loop->fd_events, link) {
 		if (loop->fds[fd_index].fd == fd) {
-			wl_list_remove(&event->link);
-			free(event);
-
-			loop->fd_length--;
-			memmove(&loop->fds[fd_index], &loop->fds[fd_index + 1],
-					sizeof(struct pollfd) * (loop->fd_length - fd_index));
+			event->removed = true;
+			loop->fds[fd_index].fd = -1;
+			loop->fds[fd_index].events = 0;
+			loop->fds[fd_index].revents = 0;
 			return true;
 		}
 		++fd_index;
