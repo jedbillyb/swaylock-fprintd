@@ -167,6 +167,9 @@ void schedule_auth_idle(struct swaylock_state *state);
 void submit_password(struct swaylock_state *state);
 
 void blur_start(struct swaylock_state *state, int dir);
+// Cubic ease-in-out mapping linear progress to eased progress. Shared so the
+// indicator can fade on exactly the same curve the background animates on.
+double blur_ease(double t);
 
 void initialize_pw_backend(int argc, char **argv);
 void run_pw_backend_child(void);

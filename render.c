@@ -300,6 +300,17 @@ static bool render_frame(struct swaylock_surface *surface) {
 	cairo_paint(cairo);
 	cairo_restore(cairo);
 
+	// Fade the indicator on the same curve as the background rather than
+	// letting it snap in at full opacity over a still-sharp desktop. Drawing
+	// it into a group and painting that once keeps the fade uniform -- doing
+	// it per-element would let the overlapping ring, fill and border blend
+	// through each other at partial alpha.
+	double indicator_alpha = 1.0;
+	if (draw_indicator && state->blur_frame_count >= 2) {
+		indicator_alpha = blur_ease(state->blur_t);
+		cairo_push_group(cairo);
+	}
+
 	if (draw_indicator) {
 		// Fill inner circle
 		cairo_set_line_width(cairo, 0);
@@ -441,6 +452,11 @@ static bool render_frame(struct swaylock_surface *surface) {
 			cairo_show_text(cairo, layout_text);
 			cairo_new_sub_path(cairo);
 		}
+	}
+
+	if (draw_indicator && state->blur_frame_count >= 2) {
+		cairo_pop_group_to_source(cairo);
+		cairo_paint_with_alpha(cairo, indicator_alpha);
 	}
 
 	// Send Wayland requests

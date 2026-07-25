@@ -1075,7 +1075,7 @@ static void blur_schedule(struct swaylock_state *state) {
 // Cubic ease-in-out. A linear ramp reads as an abrupt lurch at both ends;
 // this eases away from rest, moves quickest through the middle, and settles
 // softly rather than stopping dead.
-static double blur_ease(double t) {
+double blur_ease(double t) {
 	if (t < 0.5) {
 		return 4.0 * t * t * t;
 	}
